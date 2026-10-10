@@ -111,16 +111,20 @@
         if (!tap) return;
         for (const f of e.touches) {
           const o = tap.pts.find(p => p.id === f.identifier);
-          if (o && Math.hypot(f.clientX - o.x, f.clientY - o.y) > 12) { tap = null; return; }
+          if (o && Math.hypot(f.clientX - o.x, f.clientY - o.y) > 30) { tap = null; return; }
         }
       });
-      c.addEventListener('touchend', e => {
-        if (!tap || e.touches.length) return;
-        const ok = performance.now() - tap.t < 350;
+      // Safari 常把兩指當成捏合／捲動的開頭而送 touchcancel，所以 cancel 也當作放開來判斷
+      const tapEnd = e => {
+        if (!tap || [...e.touches].some(t => t.touchType !== 'stylus')) return;
+        const ok = performance.now() - tap.t < 600;
         tap = null;
-        if (ok) { e.preventDefault(); this.undo(); }
-      }, { passive: false });
-      c.addEventListener('touchcancel', () => { tap = null; });
+        if (ok) { if (e.cancelable) e.preventDefault(); this.undo(); }
+      };
+      c.addEventListener('touchend', tapEnd, { passive: false });
+      c.addEventListener('touchcancel', tapEnd);
+      // Safari 不理 user-scalable=no，兩指在紙上會被當成縮放；紙上不准縮放
+      c.addEventListener('gesturestart', e => e.preventDefault());
       el._pad = this;
     }
 
