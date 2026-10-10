@@ -1,5 +1,5 @@
 // 離線用：App 本身和內建資料先存起來；手寫辨識、tesseract 這些外面的網址不經過這裡
-const CACHE = 'starwords-v4';
+const CACHE = 'starwords-v5';
 const FILES = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/logic.js', 'js/ui.js', 'js/vendor/perfect-freehand.js', 'js/ink.js', 'js/widgets.js', 'js/game.js', 'js/penalty.js', 'js/grammar.js',

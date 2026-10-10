@@ -157,7 +157,14 @@
     smoothPressure(pt) {
       const pts = this.current.stroke.points;
       const prev = pts[pts.length - 1];
-      if (prev) pt.p = prev.p * 0.65 + pt.p * 0.35;
+      if (prev) {
+        pt.p = prev.p * 0.8 + pt.p * 0.2;
+        // Safari 給的座標很粗（整數 px），慢慢寫會一格一格跳；位置也跟上一點平均，越慢平均越重
+        const d = Math.hypot(pt.x - prev.x, pt.y - prev.y);
+        const a = Math.min(1, 0.25 + d / 12);
+        pt.x = prev.x + (pt.x - prev.x) * a;
+        pt.y = prev.y + (pt.y - prev.y) * a;
+      }
       return pt;
     }
 
@@ -301,7 +308,7 @@
 
   /// 用 perfect-freehand 把一筆算成一個外框再填滿：位置有平滑（streamline），粗細一路連續變化，
   /// 不會像一段一段畫那樣接縫處一粗一細。感壓關掉時 thinning 0＝固定粗細。
-  /// 感壓開著時粗細範圍跟原本一樣：筆寬 ×（0.35 ～ 1.65）
+  /// 感壓開著時粗細是筆寬 ×（0.5 ～ 1.5），比原本窄一點，力道雜訊才不會變成邊緣起伏
   function drawStroke(ctx, s, done) {
     const pts = s.points;
     ctx.fillStyle = Theme.ink;
@@ -315,7 +322,7 @@
     }
     const outline = PF.getStroke(pts.map(p => [p.x, p.y, p.p]), {
       size: s.w,
-      thinning: s.pressure ? 0.65 : 0,
+      thinning: s.pressure ? 0.5 : 0,
       smoothing: 0.7,
       streamline: 0.6,
       simulatePressure: false,
