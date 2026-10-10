@@ -98,6 +98,29 @@
       };
       c.addEventListener('touchstart', stylusGuard, { passive: false });
       c.addEventListener('touchmove', stylusGuard, { passive: false });
+      // 兩根手指在紙上點一下＝撤銷上一筆（擦掉也算一步）。手指有移動就是在捲動，不算
+      this.history = [];
+      let tap = null;
+      c.addEventListener('touchstart', e => {
+        const fingers = [...e.touches].filter(t => t.touchType !== 'stylus');
+        if (fingers.length === 2 && !this.current) {
+          tap = { t: performance.now(), pts: fingers.map(f => ({ id: f.identifier, x: f.clientX, y: f.clientY })) };
+        } else if (fingers.length > 2) tap = null;
+      });
+      c.addEventListener('touchmove', e => {
+        if (!tap) return;
+        for (const f of e.touches) {
+          const o = tap.pts.find(p => p.id === f.identifier);
+          if (o && Math.hypot(f.clientX - o.x, f.clientY - o.y) > 12) { tap = null; return; }
+        }
+      });
+      c.addEventListener('touchend', e => {
+        if (!tap || e.touches.length) return;
+        const ok = performance.now() - tap.t < 350;
+        tap = null;
+        if (ok) { e.preventDefault(); this.undo(); }
+      }, { passive: false });
+      c.addEventListener('touchcancel', () => { tap = null; });
       el._pad = this;
     }
 
@@ -147,8 +170,10 @@
       e.preventDefault();
       try { this.canvas.setPointerCapture(e.pointerId); } catch (err) { /* 沒關係 */ }
       const pt = this.point(e);
+      this.history.push(this.strokes.slice());
+      if (this.history.length > 50) this.history.shift();
       if (this.opts.erasing && this.opts.erasing()) {
-        this.current = { erasing: true, id: e.pointerId };
+        this.current = { erasing: true, id: e.pointerId, base: this.strokes };
         this.lastErase = pt;
         this.erase(pt, pt);
         return;
@@ -186,8 +211,16 @@
       const cur = this.current;
       this.current = null;
       if (!cur.erasing) this.strokes.push(cur.stroke);
+      else if (this.strokes === cur.base) this.history.pop(); // 擦了空白的地方，不算一步
       this.redraw();
       if (this.alive && this.opts.onChange) this.opts.onChange(this.strokes.slice());
+    }
+
+    undo() {
+      if (!this.alive || this.current || !this.history.length) return;
+      this.strokes = this.history.pop();
+      this.redraw();
+      if (this.opts.onChange) this.opts.onChange(this.strokes.slice());
     }
 
     /// 像真的橡皮擦（PKEraserTool(.bitmap, width: 28)）：擦過的地方就消失，不用剛好碰到整筆
