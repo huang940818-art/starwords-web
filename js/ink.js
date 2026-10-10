@@ -126,6 +126,14 @@
       return { x: e.clientX - r.left, y: e.clientY - r.top, p, t: Math.round(performance.now()) };
     }
 
+    /// Pencil 的力道每一點都在跳，直接拿來當粗細，線的邊緣就會抖；跟上一點平均一下
+    smoothPressure(pt) {
+      const pts = this.current.stroke.points;
+      const prev = pts[pts.length - 1];
+      if (prev) pt.p = prev.p * 0.65 + pt.p * 0.35;
+      return pt;
+    }
+
     accepts(e) {
       // 只有 Apple Pencil 畫；手掌、手指不畫
       if (e.pointerType !== 'pen') return false;
@@ -160,10 +168,17 @@
           this.erase(this.lastErase, pt);
           this.lastErase = pt;
         } else {
-          this.current.stroke.points.push(pt);
+          this.current.stroke.points.push(this.smoothPressure(pt));
         }
       }
-      this.redraw();
+      this.scheduleDraw();
+    }
+
+    /// 一秒會進來兩百多個點，每個都重畫太重；一格畫面只畫一次
+    scheduleDraw() {
+      if (this.drawPending) return;
+      this.drawPending = true;
+      requestAnimationFrame(() => { this.drawPending = false; this.redraw(!!this.cacheDirty); });
     }
 
     up(e) {
@@ -192,14 +207,28 @@
         }
         if (run.length) out.push({ ...s, points: run });
       }
-      if (changed) this.strokes = out;
+      if (changed) { this.strokes = out; this.cacheDirty = true; }
     }
 
-    redraw() {
+    /// 寫完的筆畫畫在另一張畫布存著，寫字的時候只重畫正在寫的那一筆
+    redraw(full = true) {
       const ctx = this.ctx;
-      ctx.clearRect(0, 0, this.size.w, this.size.h);
-      for (const s of this.strokes) drawStroke(ctx, s);
-      if (this.current && this.current.stroke) drawStroke(ctx, this.current.stroke);
+      const c = this.canvas;
+      if (full) this.cacheDirty = false;
+      if (full || !this.cache || this.cache.width !== c.width || this.cache.height !== c.height) {
+        if (!this.cache) this.cache = document.createElement('canvas');
+        this.cache.width = c.width;
+        this.cache.height = c.height;
+        const cc = this.cache.getContext('2d');
+        cc.setTransform(c.width / Math.max(1, this.size.w), 0, 0, c.height / Math.max(1, this.size.h), 0, 0);
+        for (const s of this.strokes) drawStroke(cc, s, true);
+      }
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, c.width, c.height);
+      ctx.drawImage(this.cache, 0, 0);
+      ctx.restore();
+      if (this.current && this.current.stroke) drawStroke(ctx, this.current.stroke, false);
     }
   }
   SW.InkPad = InkPad;
@@ -233,42 +262,37 @@
     return s.pressure ? s.w * (0.35 + 1.3 * p) : s.w;
   }
 
-  function drawStroke(ctx, s) {
+  /// 用 perfect-freehand 把一筆算成一個外框再填滿：位置有平滑（streamline），粗細一路連續變化，
+  /// 不會像一段一段畫那樣接縫處一粗一細。感壓關掉時 thinning 0＝固定粗細。
+  /// 感壓開著時粗細範圍跟原本一樣：筆寬 ×（0.35 ～ 1.65）
+  function drawStroke(ctx, s, done) {
     const pts = s.points;
-    ctx.strokeStyle = Theme.ink;
     ctx.fillStyle = Theme.ink;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    if (pts.length === 1) {
+    if (!pts.length) return;
+    const PF = window.PerfectFreehand;
+    if (!PF || pts.length === 1) {
       ctx.beginPath();
       ctx.arc(pts[0].x, pts[0].y, widthAt(s, pts[0].p) / 2, 0, Math.PI * 2);
       ctx.fill();
       return;
     }
-    if (!s.pressure) {
-      ctx.lineWidth = s.w;
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length - 1; i++) {
-        const mx = (pts[i].x + pts[i + 1].x) / 2, my = (pts[i].y + pts[i + 1].y) / 2;
-        ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
-      }
-      ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
-      ctx.stroke();
-      return;
+    const outline = PF.getStroke(pts.map(p => [p.x, p.y, p.p]), {
+      size: s.w,
+      thinning: s.pressure ? 0.65 : 0,
+      smoothing: 0.7,
+      streamline: 0.6,
+      simulatePressure: false,
+      last: done,
+    });
+    if (outline.length < 3) return;
+    ctx.beginPath();
+    ctx.moveTo(outline[0][0], outline[0][1]);
+    for (let i = 1; i < outline.length; i++) {
+      const a = outline[i], b = outline[(i + 1) % outline.length];
+      ctx.quadraticCurveTo(a[0], a[1], (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
     }
-    // 感壓：一段一段畫，每段用那段的粗細
-    let prevMid = pts[0];
-    for (let i = 1; i < pts.length; i++) {
-      const a = pts[i - 1], b = pts[i];
-      const mid = i < pts.length - 1 ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : b;
-      ctx.lineWidth = widthAt(s, (a.p + b.p) / 2);
-      ctx.beginPath();
-      ctx.moveTo(prevMid.x, prevMid.y);
-      ctx.quadraticCurveTo(a.x, a.y, mid.x, mid.y);
-      ctx.stroke();
-      prevMid = mid;
-    }
+    ctx.closePath();
+    ctx.fill();
   }
 
   // MARK: - 筆畫的工具
